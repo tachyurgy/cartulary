@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cartulary — what breaks if I change this</title>
+<style>
+  :root{--bg:#fbfbfa;--ink:#15171a;--muted:#5f6771;--line:#e3e5e2;--card:#fff;
+        --accent:#2d5f4c;--ok:#1e6a4a;--bad:#a13627;--warn:#93671c;
+        --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;}
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0f1211;--ink:#eef1ee;--muted:#96a09a;--line:#242923;--card:#171b18;
+          --accent:#6fbf9e;--ok:#79c9a2;--bad:#e2907c;--warn:#d7ac62;}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:38px 20px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:22px}
+  h1{font-size:27px;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--muted);margin:0}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+     font-family:var(--mono);margin:26px 0 10px}
+  .cols{display:flex;gap:16px;flex-wrap:wrap}
+  .col{flex:1 1 300px;min-width:0}
+  .sym{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+       padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:var(--card);
+       margin:5px 0;cursor:pointer;font-family:var(--mono);font-size:12.5px}
+  .sym:hover{border-color:var(--accent)}
+  .sym.sel{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+  .sym .k{color:var(--muted);font-size:11px}
+  .warnbox{background:var(--card);border:1px solid var(--warn);border-radius:8px;
+           padding:11px 13px;margin:10px 0;font-size:13.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:9px;
+        padding:12px 14px;margin:8px 0}
+  .lvl{display:flex;gap:8px;align-items:baseline;font-family:var(--mono);font-size:12.5px;
+       padding:4px 0;border-bottom:1px solid var(--line)}
+  .lvl:last-child{border-bottom:0}
+  .badge{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:999px;
+         border:1px solid var(--line);color:var(--muted)}
+  .badge.cy{border-color:var(--bad);color:var(--bad)}
+  pre{font-family:var(--mono);font-size:12px;background:var(--card);border:1px solid var(--line);
+      border-radius:8px;padding:11px;overflow-x:auto;margin:6px 0 0}
+  .note{color:var(--muted);font-size:13.5px;margin:8px 0 0}
+  code{font-family:var(--mono);font-size:.92em}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Cartulary</h1>
+  <p class="sub">A symbol graph that answers "what breaks if I change this" — without merging same-named functions or hanging on an import cycle.</p>
+</header>
+
+<div id="collisions"></div>
+
+<div class="cols">
+  <div class="col">
+    <h2>Symbols</h2>
+    <div id="symbols"></div>
+  </div>
+  <div class="col">
+    <h2>Impact</h2>
+    <div id="impact"><p class="note">Pick a symbol.</p></div>
+    <h2>Source</h2>
+    <pre id="source">—</pre>
+  </div>
+</div>
+</div>
+
+<script>
+const $ = i => document.getElementById(i);
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let selected = null;
+
+async function load(){
+  const d = await (await fetch('/api/symbols')).json();
+
+  const cols = Object.entries(d.collisions);
+  $('collisions').innerHTML = cols.length ? cols.map(([short, fqns]) =>
+    '<div class="warnbox"><b>Shadowed name:</b> <code>' + esc(short) + '</code> is defined in ' +
+    fqns.length + ' modules — ' + fqns.map(f => '<code>' + esc(f) + '</code>').join(', ') +
+    '. Select each one: their impact sets are different. A graph keyed on the short name reports both as one symbol.</div>'
+  ).join('') : '';
+
+  $('symbols').innerHTML = d.symbols.map(s =>
+    '<div class="sym" data-fqn="' + esc(s.fqn) + '" onclick="pick(this.dataset.fqn)">' +
+    '<span>' + esc(s.fqn) + '</span>' +
+    '<span class="k">' + esc(s.kind) + ' · ' + s.callers + ' caller' + (s.callers === 1 ? '' : 's') + '</span></div>'
+  ).join('');
+}
+
+async function pick(fqn){
+  selected = fqn;
+  document.querySelectorAll('.sym').forEach(e => e.classList.toggle('sel', e.dataset.fqn === fqn));
+
+  const d = await (await fetch('/api/impact?fqn=' + encodeURIComponent(fqn))).json();
+  const cyc = new Set(d.in_cycle);
+  const rows = d.transitive.length
+    ? d.transitive.map(t =>
+        '<div class="lvl"><span class="badge">depth ' + d.depth[t] + '</span>' +
+        '<span>' + esc(t) + '</span>' +
+        (cyc.has(t) ? '<span class="badge cy">in cycle</span>' : '') + '</div>').join('')
+    : '<p class="note">Nothing depends on this.</p>';
+
+  $('impact').innerHTML = '<div class="card"><b>' + esc(d.target) + '</b>' +
+    '<p class="note">' + d.direct.length + ' direct caller' + (d.direct.length === 1 ? '' : 's') +
+    ', ' + d.transitive.length + ' affected in total' +
+    (d.in_cycle.length ? ', ' + d.in_cycle.length + ' in an import cycle' : '') + '</p>' +
+    rows + '</div>';
+
+  const module = fqn.split('.').slice(0, -1).join('.');
+  const tryModules = [module, fqn.split('.').slice(0, -2).join('.')];
+  for (const m of tryModules){
+    const r = await fetch('/api/source?module=' + encodeURIComponent(m));
+    if (r.ok){ const s = await r.json(); $('source').textContent = '# ' + s.module + '\n\n' + s.source; return; }
+  }
+  $('source').textContent = '—';
+}
+load();
+</script>
+</body>
+</html>
